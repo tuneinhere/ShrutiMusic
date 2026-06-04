@@ -1,329 +1,175 @@
-# Copyright (c) 2025 Nand Yaduwanshi <NoxxOP>
-# Location: Supaul, Bihar
-#
-# All rights reserved.
-#
-# This code is the intellectual property of Nand Yaduwanshi.
-# You are not allowed to copy, modify, redistribute, or use this
-# code for commercial or personal projects without explicit permission.
-#
-# Allowed:
-# - Forking for personal learning
-# - Submitting improvements via pull requests
-#
-# Not Allowed:
-# - Claiming this code as your own
-# - Re-uploading without credit or permission
-# - Selling or using commercially
-#
-# Contact for permissions:
-# Email: badboy809075@gmail.com
-
-
+from pyrogram import Client, filters
+from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+from pyrogram.enums import ChatMembersFilter
 import asyncio
-from pyrogram import filters
-from pyrogram.enums import ChatMembersFilter, ParseMode
-from pyrogram.errors import FloodWait
 import random
-import re
+from time import time
+import logging
 
 from ShrutiMusic import app
 
-SPAM_CHATS = []
-EMOJI = [
-    "🦋🦋🦋🦋🦋",
-    "🧚🌸🧋🍬🫖",
-    "🥀🌷🌹🌺💐",
-    "🌸🌿💮🌱🌵",
-    "❤️💚💙💜🖤",
-    "💓💕💞💗💖",
-    "🌸💐🌺🌹🦋",
-    "🍔🦪🍛🍲🥗",
-    "🍎🍓🍒🍑🌶️",
-    "🧋🥤🧋🥛🍷",
-    "🍬🍭🧁🎂🍡",
-    "🍨🧉🍺☕🍻",
-    "🥪🥧🍦🍥🍚",
-    "🫖☕🍹🍷🥛",
-    "☕🧃🍩🍦🍙",
-    "🍁🌾💮🍂🌿",
-    "🌨️🌥️⛈️🌩️🌧️",
-    "🌷🏵️🌸🌺💐",
-    "💮🌼🌻🍀🍁",
-    "🧟🦸🦹🧙👸",
-    "🧅🍠🥕🌽🥦",
-    "🐷🐹🐭🐨🐻‍❄️",
-    "🦋🐇🐀🐈🐈‍⬛",
-    "🌼🌳🌲🌴🌵",
-    "🥩🍋🍐🍈🍇",
-    "🍴🍽️🔪🍶🥃",
-    "🕌🏰🏩⛩️🏩",
-    "🎉🎊🎈🎂🎀",
-    "🪴🌵🌴🌳🌲",
-    "🎄🎋🎍🎑🎎",
-    "🦅🦜🕊️🦤🦢",
-    "🦤🦩🦚🦃🦆",
-    "🐬🦭🦈🐋🐳",
-    "🐔🐟🐠🐡🦐",
-    "🦩🦀🦑🐙🦪",
-    "🐦🦂🕷️🕸️🐚",
-    "🥪🍰🥧🍨🍨",
-    "🥬🍉🧁🧇🔮",
-]
+# ================= GLOBAL =================
+tasks = {}  # simpan task per chat
+message_ids_to_delete = {}
 
-def clean_text(text):
-    """Escape markdown special characters"""
-    if not text:
-        return ""
-    return re.sub(r'([_*()~`>#+-=|{}.!])', r'\\1', text)
-
-async def is_admin(chat_id, user_id):
-    admin_ids = [
+# ================= ADMIN CHECK =================
+async def is_admin(chat_id, user_id, client):
+    admins = [
         admin.user.id
-        async for admin in app.get_chat_members(
-            chat_id, filter=ChatMembersFilter.ADMINISTRATORS
-        )
+        async for admin in client.get_chat_members(chat_id, filter=ChatMembersFilter.ADMINISTRATORS)
     ]
-    return user_id in admin_ids
+    return user_id in admins
 
-async def process_members(chat_id, members, text=None, replied=None):
-    tagged_members = 0
-    usernum = 0
-    usertxt = ""
-    emoji_sequence = random.choice(EMOJI)
-    emoji_index = 0
-    
-    for member in members:
-        if chat_id not in SPAM_CHATS:
-            break
-        if member.user.is_deleted or member.user.is_bot:
-            continue
-            
-        tagged_members += 1
-        usernum += 1
-        
-        emoji = emoji_sequence[emoji_index % len(emoji_sequence)]
-        usertxt += f"[{emoji}](tg://user?id={member.user.id}) "
-        emoji_index += 1
-        
-        if usernum == 5:
-            try:
-                if replied:
-                    await replied.reply_text(
-                        usertxt,
-                        disable_web_page_preview=True,
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                else:
-                    await app.send_message(
-                        chat_id,
-                        f"{text}\n{usertxt}",
-                        disable_web_page_preview=True,
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                await asyncio.sleep(2)  # Reduced sleep time to 2 seconds
-                usernum = 0
-                usertxt = ""
-                emoji_sequence = random.choice(EMOJI)
-                emoji_index = 0
-            except FloodWait as e:
-                await asyncio.sleep(e.value + 2)  # Extra buffer time
-            except Exception as e:
-                await app.send_message(chat_id, f"Error while tagging: {str(e)}")
-                continue
-    
-    if usernum > 0 and chat_id in SPAM_CHATS:
+def get_arg(message):
+    return message.text.split(None, 1)[1] if len(message.text.split()) > 1 else ""
+
+# ================= TAGALL =================
+@app.on_message(filters.command(["tagall"]) & filters.group)
+async def tag_all(c: Client, m: Message):
+    if not await is_admin(m.chat.id, m.from_user.id, c):
+        return await m.reply("<blockquote><b>❌ Khusus admin doang.</b></blockquote>")
+
+    # kalau masih ada task lama → stop dulu
+    if m.chat.id in tasks:
         try:
-            if replied:
-                await replied.reply_text(
-                    usertxt,
-                    disable_web_page_preview=True,
-                    parse_mode=ParseMode.MARKDOWN
+            tasks[m.chat.id].cancel()
+        except:
+            pass
+
+    msg = await m.reply("<blockquote><b>⏳ Processing tagall...</b></blockquote>")
+    start_time = time()
+
+    emoji_list = ["🔥","🚀","💀","😂","😈","⚡","👽","🤖","👻","🐼"]
+
+    # ambil user
+    users = [
+        f"<a href=tg://user?id={u.user.id}>{random.choice(emoji_list)}</a>"
+        async for u in c.get_chat_members(m.chat.id)
+        if not (u.user.is_bot or u.user.is_deleted)
+    ]
+
+    async def run_tag():
+        sent_ids = []
+        total = 0
+
+        try:
+            for chunk in [users[i:i+5] for i in range(0, len(users), 5)]:
+
+                text = f"{get_arg(m)}\n<blockquote><b>@NakaiStore</b></blockquote>\n\n{' '.join(chunk)}"
+
+                sent = await m.reply(
+                    text,
+                    quote=bool(m.reply_to_message),
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🚫 Stop", callback_data=f"stop:{m.chat.id}")]
+                    ])
                 )
-            else:
-                await app.send_message(
-                    chat_id,
-                    f"{text}\n\n{usertxt}",
-                    disable_web_page_preview=True,
-                    parse_mode=ParseMode.MARKDOWN
-                )
+
+                sent_ids.append(sent.id)
+                total += len(chunk)
+
+                # 🔥 delay responsive (bisa langsung cancel)
+                for _ in range(20):
+                    await asyncio.sleep(0.1)
+
+        except asyncio.CancelledError:
+            await m.reply("<blockquote><b>🚫 Tagall dihentikan</b></blockquote>")
+            return
+
         except Exception as e:
-            await app.send_message(chat_id, f"Error sending final batch: {str(e)}")
-    
-    return tagged_members
+            logging.error(f"Tagall error: {e}")
+            await m.reply("<blockquote><b>❌ Terjadi error saat tagall.</b></blockquote>")
+            return
 
-@app.on_message(
-    filters.command(["all", "allmention", "mentionall", "tagall"], prefixes=["/", "@"])
-)
-async def tag_all_users(_, message):
-    admin = await is_admin(message.chat.id, message.from_user.id)
-    if not admin:
-        return await message.reply_text("Only admins can use this command.")
+        finally:
+            # hapus pesan loading
+            try:
+                await msg.delete()
+            except:
+                pass
 
-    if message.chat.id in SPAM_CHATS:  
-        return await message.reply_text(  
-            "Tagging process is already running. Use /cancel to stop it."  
-        )  
-    
-    replied = message.reply_to_message  
-    if len(message.command) < 2 and not replied:  
-        return await message.reply_text(  
-            "Give some text to tag all, like: `@all Hi Friends`"  
-        )  
-    
-    try:  
-        # Get all members at once to avoid multiple iterations
-        members = []
-        async for m in app.get_chat_members(message.chat.id):
-            members.append(m)
-        
-        total_members = len(members)
-        SPAM_CHATS.append(message.chat.id)
-        
-        text = None
-        if not replied:
-            text = clean_text(message.text.split(None, 1)[1])
-        
-        tagged_members = await process_members(
-            message.chat.id,
-            members,
-            text=text,
-            replied=replied
-        )
-        
-        summary_msg = f"""
-✅ Tagging completed!
+            # simpan id pesan buat dihapus nanti
+            if sent_ids:
+                message_ids_to_delete[m.chat.id] = sent_ids
 
-Total members: {total_members}
-Tagged members: {tagged_members}
-"""
-        await app.send_message(message.chat.id, summary_msg)
+            end_time = round(time() - start_time, 2)
 
-    except FloodWait as e:  
-        await asyncio.sleep(e.value)  
-    except Exception as e:  
-        await app.send_message(message.chat.id, f"An error occurred: {str(e)}")  
-    finally:  
-        try:  
-            SPAM_CHATS.remove(message.chat.id)  
-        except Exception:  
-            pass
+            await m.reply(
+                f"<blockquote><b>✅ Selesai tagall {total} user\n⏱ Waktu: {end_time} detik</b></blockquote>",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🗑 Hapus Tagall", callback_data="delete_all")]
+                ])
+            )
 
-@app.on_message(
-    filters.command(["admintag", "adminmention", "admins", "report"], prefixes=["/", "@"])
-)
-async def tag_all_admins(_, message):
-    if not message.from_user:
-        return
+            # hapus task dari dict
+            tasks.pop(m.chat.id, None)
 
-    admin = await is_admin(message.chat.id, message.from_user.id)  
-    if not admin:  
-        return await message.reply_text("Only admins can use this command.")  
-
-    if message.chat.id in SPAM_CHATS:  
-        return await message.reply_text(  
-            "Tagging process is already running. Use /cancel to stop it."  
-        )  
-    
-    replied = message.reply_to_message  
-    if len(message.command) < 2 and not replied:  
-        return await message.reply_text(  
-            "Give some text to tag admins, like: `@admins Hi Friends`"  
-        )  
-    
-    try:  
-        # Get all admins at once
-        members = []
-        async for m in app.get_chat_members(
-            message.chat.id, filter=ChatMembersFilter.ADMINISTRATORS  
-        ):
-            members.append(m)
-        
-        total_admins = len(members)
-        SPAM_CHATS.append(message.chat.id)
-        
-        text = None
-        if not replied:
-            text = clean_text(message.text.split(None, 1)[1])
-        
-        tagged_admins = await process_members(
-            message.chat.id,
-            members,
-            text=text,
-            replied=replied
-        )
-        
-        summary_msg = f"""
-✅ Admin tagging completed!
-
-Total admins: {total_admins}
-Tagged admins: {tagged_admins}
-"""
-        await app.send_message(message.chat.id, summary_msg)
-
-    except FloodWait as e:  
-        await asyncio.sleep(e.value)  
-    except Exception as e:  
-        await app.send_message(message.chat.id, f"An error occurred: {str(e)}")  
-    finally:  
-        try:  
-            SPAM_CHATS.remove(message.chat.id)  
-        except Exception:  
-            pass
-
-@app.on_message(
-    filters.command(
-        [
-            "stopmention",
-            "cancel",
-            "cancelmention",
-            "offmention",
-            "mentionoff",
-            "cancelall",
-        ],
-        prefixes=["/", "@"],
-    )
-)
-async def cancelcmd(_, message):
-    chat_id = message.chat.id
-    admin = await is_admin(chat_id, message.from_user.id)
-    if not admin:
-        return await message.reply_text("Only admins can use this command.")
-
-    if chat_id in SPAM_CHATS:  
-        try:  
-            SPAM_CHATS.remove(chat_id)  
-        except Exception:  
-            pass  
-        return await message.reply_text("Tagging process successfully stopped!")  
-    else:  
-        return await message.reply_text("No tagging process is currently running!")
-
-MODULE = "Tᴀɢᴀʟʟ"
-HELP = """
-@all or /all | /tagall or @tagall | /mentionall or @mentionall [text] or [reply to any message] - Tag all users in your group with random emojis (changes every 5 users)
-
-/admintag or @admintag | /adminmention or @adminmention | /admins or @admins [text] or [reply to any message] - Tag all admins in your group with random emojis (changes every 5 users)
-
-/stopmention or @stopmention | /cancel or @cancel | /offmention or @offmention | /mentionoff or @mentionoff | /cancelall or @cancelall - Stop any running tagging process
-
-Note:
-
-1. These commands can only be used by admins
-2. The bot and assistant must be admins in your group
-3. Users will be tagged with random emojis that link to their profiles
-4. After completion, you'll get a summary with counts
-5. Tags 5 users at a time with unique emoji sequence for each batch
-"""
+    task = asyncio.create_task(run_tag())
+    tasks[m.chat.id] = task
 
 
-# ©️ Copyright Reserved - @NoxxOP  Nand Yaduwanshi
+# ================= CANCEL COMMAND =================
+@app.on_message(filters.command("cancel") & filters.group)
+async def cancel_tag(c: Client, m: Message):
+    if not await is_admin(m.chat.id, m.from_user.id, c):
+        return await m.reply("<blockquote><b>❌ Bukan admin.</b></blockquote>")
 
-# ===========================================
-# ©️ 2025 Nand Yaduwanshi (aka @NoxxOP)
-# 🔗 GitHub : https://github.com/NoxxOP/ShrutiMusic
-# 📢 Telegram Channel : https://t.me/ShrutiBots
-# ===========================================
+    task = tasks.get(m.chat.id)
+
+    if not task:
+        return await m.reply("<blockquote><b>⚠️ Tagall tidak sedang berjalan.</b></blockquote>")
+
+    task.cancel()
+    tasks.pop(m.chat.id, None)
+
+    await m.reply("<blockquote><b>🚫Tagall dihentikan</b></blockquote>")
 
 
-# ❤️ Love From ShrutiBots 
+# ================= BUTTON STOP =================
+@app.on_callback_query(filters.regex(r"stop:(\d+)"))
+async def stop_btn(c: Client, cq: CallbackQuery):
+    chat_id = int(cq.data.split(":")[1])
+
+    if not await is_admin(chat_id, cq.from_user.id, c):
+        return await cq.answer("❌ Bukan admin!", show_alert=True)
+
+    task = tasks.get(chat_id)
+
+    if not task:
+        return await cq.answer("⚠️ Sudah berhenti.", show_alert=True)
+
+    task.cancel()
+    tasks.pop(chat_id, None)
+
+    await cq.answer("🚫 Tagall dihentikan", show_alert=True)
+
+    try:
+        await cq.message.edit("<blockquote><b>🚫 Tagall dihentikan</b></blockquote>")
+    except:
+        pass
+
+
+# ================= DELETE ALL =================
+@app.on_callback_query(filters.regex("delete_all"))
+async def delete_all(c: Client, cq: CallbackQuery):
+    chat_id = cq.message.chat.id
+
+    if not await is_admin(chat_id, cq.from_user.id, c):
+        return await cq.answer("❌ Bukan admin!", show_alert=True)
+
+    ids = message_ids_to_delete.get(chat_id)
+
+    if not ids:
+        return await cq.answer("⚠️ Tidak ada pesan.", show_alert=True)
+
+    try:
+        for i in range(0, len(ids), 50):
+            await c.delete_messages(chat_id, ids[i:i+50])
+
+        message_ids_to_delete.pop(chat_id, None)
+
+        await cq.answer("✅ Semua tag berhasil dihapus", show_alert=True)
+
+    except Exception as e:
+        logging.error(f"Delete error: {e}")
+        await cq.answer("❌ Gagal menghapus pesan", show_alert=True)
